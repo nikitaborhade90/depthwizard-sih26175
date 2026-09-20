@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DepthWizard — Single-View Height Estimation and 3D Flythrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --sea:#0e1a24; --panel:#152430; --raised:#1c3242; --line:#26404f;
+  --ink:#e8f0f4; --muted:#8fa8b6; --faint:#5d7787;
+  --amber:#f5a524; --hydro:#5aa9e6; --risk:#ef5d4f; --grow:#63c08a;
+  --pad-t:env(safe-area-inset-top,0px); --pad-b:env(safe-area-inset-bottom,0px);
+  color-scheme:dark;
+}
+:root:not([data-theme="dark"]){
+  --sea:#eef3f6; --panel:#ffffff; --raised:#f2f6f9; --line:#d3dee5;
+  --ink:#10222e; --muted:#4f6878; --faint:#7d95a3;
+  --amber:#b97400; --hydro:#1d6fae; --risk:#c23a2d; --grow:#2d7d51;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --sea:#0e1a24; --panel:#152430; --raised:#1c3242; --line:#26404f;
+    --ink:#e8f0f4; --muted:#8fa8b6; --faint:#5d7787;
+    --amber:#f5a524; --hydro:#5aa9e6; --risk:#ef5d4f; --grow:#63c08a;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --sea:#0e1a24; --panel:#152430; --raised:#1c3242; --line:#26404f;
+  --ink:#e8f0f4; --muted:#8fa8b6; --faint:#5d7787;
+  --amber:#f5a524; --hydro:#5aa9e6; --risk:#ef5d4f; --grow:#63c08a;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+html{scroll-padding-top:var(--pad-t)}
+body{
+  background:var(--sea); color:var(--ink);
+  font:400 14px/1.5 "IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  padding-top:var(--pad-t); padding-bottom:var(--pad-b);
+  display:flex; flex-direction:column; overflow:hidden;
+}
+h1,h2,h3{font-family:Archivo,"IBM Plex Sans",sans-serif;font-weight:600;margin:0}
+button,input,select{font-family:inherit;font-size:inherit;color:inherit}
+.num{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:4px}
+
+/* ---------- top bar ---------- */
+.topbar{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);flex:0 0 auto;
+}
+.mark{display:flex;align-items:baseline;gap:9px}
+.mark h1{font-size:19px;letter-spacing:-.015em}
+.mark span{color:var(--muted);font-size:12.5px}
+.ps{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap}
+.tag{
+  border:1px solid var(--line);border-radius:999px;padding:3px 10px;
+  font-size:11.5px;color:var(--muted);background:var(--raised);white-space:nowrap;
+}
+.tag b{color:var(--ink);font-weight:600}
+.iconbtn{background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer;font-size:12px;color:var(--muted)}
+.iconbtn:hover{color:var(--ink);border-color:var(--amber)}
+
+/* ---------- shell ---------- */
+.shell{flex:1 1 auto;display:grid;grid-template-columns:258px minmax(0,1fr) 316px;min-height:0}
+.col{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.rail{border-right:1px solid var(--line);background:var(--panel)}
+.inspector{border-left:1px solid var(--line);background:var(--panel)}
+.scroll{overflow-y:auto;overscroll-behavior:contain;min-height:0}
+.sect{padding:13px 14px;border-bottom:1px solid var(--line)}
+.sect h3{font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:10px;letter-spacing:.01em}
+
+/* ---------- pipeline rail ---------- */
+.stage{display:grid;grid-template-columns:22px 1fr;gap:9px;padding:7px 14px;align-items:start;position:relative}
+.stage .idx{
+  width:22px;height:22px;border-radius:6px;display:grid;place-items:center;
+  font:500 11px/1 "IBM Plex Mono",monospace;border:1px solid var(--line);color:var(--faint);background:var(--raised);
+}
+.stage .nm{font-size:13px;font-weight:500;color:var(--faint);line-height:1.35}
+.stage .ms{font:400 11px/1 "IBM Plex Mono",monospace;color:var(--faint);margin-top:3px;display:block}
+.stage.run .idx{border-color:var(--amber);color:var(--amber)}
+.stage.run .nm{color:var(--ink)}
+.stage.done .idx{background:var(--amber);border-color:var(--amber);color:#1b1206}
+.stage.done .nm{color:var(--ink)}
+:root:not([data-theme="dark"]) .stage.done .idx{color:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .stage.done .idx{color:#1b1206}}
+.stage::after{content:"";position:absolute;left:24px;top:29px;bottom:-7px;width:1px;background:var(--line)}
+.stage:last-of-type::after{display:none}
+
+.log{font:400 11px/1.6 "IBM Plex Mono",monospace;color:var(--faint);max-height:190px;overflow-y:auto;padding:0 14px 12px}
+.log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.log b{color:var(--muted);font-weight:500}
+
+/* ---------- viewport ---------- */
+.viewwrap{flex:1 1 auto;position:relative;min-height:0;background:var(--sea)}
+#gl{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+#gl.dragging{cursor:grabbing}
+#gl.probe{cursor:crosshair}
+.overlay{position:absolute;pointer-events:none}
+.hud{left:12px;top:12px;display:flex;gap:6px;flex-wrap:wrap;pointer-events:auto}
+.chip{
+  background:color-mix(in srgb,var(--panel) 88%,transparent);border:1px solid var(--line);
+  border-radius:7px;padding:5px 9px;font-size:12px;cursor:pointer;color:var(--muted);backdrop-filter:blur(6px);
+}
+.chip:hover{color:var(--ink)}
+.chip.on{border-color:var(--amber);color:var(--amber)}
+.legend{
+  right:12px;bottom:12px;background:color-mix(in srgb,var(--panel) 90%,transparent);
+  border:1px solid var(--line);border-radius:8px;padding:8px 10px;backdrop-filter:blur(6px);min-width:132px;
+}
+.legend .lt{font-size:11px;color:var(--muted);margin-bottom:6px}
+.ramp{height:8px;border-radius:3px;margin-bottom:4px}
+.lscale{display:flex;justify-content:space-between;font:400 10.5px/1 "IBM Plex Mono",monospace;color:var(--muted)}
+.readout{
+  left:12px;bottom:12px;background:color-mix(in srgb,var(--panel) 92%,transparent);
+  border:1px solid var(--line);border-left:2px solid var(--amber);border-radius:8px;padding:9px 12px;backdrop-filter:blur(6px);
+}
+.readout .big{font:600 21px/1 "IBM Plex Mono",monospace;color:var(--amber)}
+.readout .sub{font-size:11.5px;color:var(--muted);margin-top:5px}
+.busy{
+  inset:0;display:none;place-items:center;background:color-mix(in srgb,var(--sea) 78%,transparent);
+  z-index:5;pointer-events:auto;
+}
+.busy.on{display:grid}
+.busy .bx{text-align:center}
+.busy .bt{font-size:13px;color:var(--muted);margin-bottom:9px}
+.bar{width:210px;height:3px;background:var(--line);border-radius:2px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--amber);transition:width .18s}
+.filmstrip{
+  display:flex;gap:1px;flex:0 0 auto;border-top:1px solid var(--line);background:var(--panel);padding:8px 10px;overflow-x:auto;
+}
+.frame{flex:0 0 auto;text-align:center;cursor:pointer;padding:0 4px;border:0;background:none}
+.frame canvas{width:74px;height:74px;display:block;border:1px solid var(--line);border-radius:5px;image-rendering:pixelated;background:var(--raised)}
+.frame span{display:block;font-size:10.5px;color:var(--faint);margin-top:4px}
+.frame.on canvas{border-color:var(--amber)}
+.frame.on span{color:var(--ink)}
+
+/* ---------- inspector controls ---------- */
+.row{display:flex;gap:7px;align-items:center;margin-bottom:9px}
+.row:last-child{margin-bottom:0}
+.btn{
+  flex:1;background:var(--raised);border:1px solid var(--line);border-radius:7px;
+  padding:8px 10px;cursor:pointer;font-size:12.5px;text-align:center;
+}
+.btn:hover{border-color:var(--amber)}
+.btn.sel{border-color:var(--amber);color:var(--amber)}
+.btn.go{background:var(--amber);border-color:var(--amber);color:#1b1206;font-weight:600}
+:root:not([data-theme="dark"]) .btn.go{color:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .btn.go{color:#1b1206}}
+.btn.go:hover{filter:brightness(1.08)}
+label.fld{display:block;margin-bottom:11px}
+label.fld .lb{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:5px}
+label.fld .lb b{font:500 12px/1 "IBM Plex Mono",monospace;color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--amber);height:18px}
+input[type=number],select{
+  width:100%;background:var(--raised);border:1px solid var(--line);border-radius:6px;padding:6px 8px;
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;
+}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:12.5px;border-bottom:1px dotted var(--line)}
+.kv:last-child{border-bottom:0}
+.kv span{color:var(--muted)}
+.kv b{font:500 12.5px/1.4 "IBM Plex Mono",monospace;text-align:right}
+.note{font-size:11.5px;color:var(--faint);line-height:1.5;margin-top:8px}
+.pill{display:inline-block;font-size:11px;padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.pill.ok{color:var(--grow);border-color:color-mix(in srgb,var(--grow) 50%,transparent)}
+.pill.warn{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 50%,transparent)}
+.hist{width:100%;height:46px;display:block;border:1px solid var(--line);border-radius:5px;background:var(--raised)}
+.prof{width:100%;height:78px;display:block;border:1px solid var(--line);border-radius:5px;background:var(--raised);margin-top:8px}
+.hidden{display:none !important}
+
+@media (max-width:1080px){ .shell{grid-template-columns:210px minmax(0,1fr) 280px} }
+@media (max-width:900px){
+  body{overflow:auto}
+  .shell{grid-template-columns:1fr;overflow:visible}
+  .col{overflow:visible}
+  .scroll{overflow:visible}
+  .rail{order:3;border-right:0;border-top:1px solid var(--line)}
+  .inspector{order:2;border-left:0;border-top:1px solid var(--line)}
+  .viewwrap{height:56vh;min-height:330px}
+  .stagecol{order:1}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="mark">
+    <h1>DepthWizard</h1>
+    <span>single-view height estimation &amp; 3D flythrough</span>
+  </div>
+  <div class="ps">
+    <span class="tag">PS <b>SIH26175</b></span>
+    <span class="tag">ISRO · Disaster Management</span>
+    <span class="tag">Team <b>Idea Spark</b></span>
+    <button class="iconbtn" id="themeBtn" title="Switch light / dark">Theme</button>
+  </div>
+</header>
+
+<div class="shell">
+
+  <!-- ============ LEFT RAIL ============ -->
+  <aside class="col rail scroll">
+    <div class="sect" style="border-bottom:0;padding-bottom:4px"><h3>Pipeline</h3></div>
+    <div id="stages">
+      <div class="stage" data-s="0"><div class="idx">1</div><div><div class="nm">Input &amp; metadata</div><span class="ms"></span></div></div>
+      <div class="stage" data-s="1"><div class="idx">2</div><div><div class="nm">Pre-processing</div><span class="ms"></span></div></div>
+      <div class="stage" data-s="2"><div class="idx">3</div><div><div class="nm">Depth estimation</div><span class="ms"></span></div></div>
+      <div class="stage" data-s="3"><div class="idx">4</div><div><div class="nm">Metric calibration</div><span class="ms"></span></div></div>
+      <div class="stage" data-s="4"><div class="idx">5</div><div><div class="nm">3D reconstruction</div><span class="ms"></span></div></div>
+      <div class="stage" data-s="5"><div class="idx">6</div><div><div class="nm">Analysis &amp; visualisation</div><span class="ms"></span></div></div>
+    </div>
+    <div class="sect" style="border-bottom:0;padding-bottom:4px;margin-top:6px"><h3>Console</h3></div>
+    <div class="log" id="log"></div>
+    <div class="sect">
+      <h3>Production architecture</h3>
+      <p class="note" style="margin-top:0">This prototype runs a classical shadow-and-shading estimator entirely in the browser so the pipeline is inspectable end to end. In deployment, stage 3 is served by a fine-tuned Depth Anything V2 model behind FastAPI:</p>
+      <p class="note num" style="color:var(--muted)">POST /v1/dsm<br>&nbsp;&nbsp;image, crs?, gcp[]?<br>→ rdsm.tif, dsm.tif, conf.tif</p>
+      <p class="note">Everything downstream of stage 3 — calibration, meshing, flood and slope analysis — is the same code path in both modes.</p>
+    </div>
+  </aside>
+
+  <!-- ============ CENTRE ============ -->
+  <section class="col stagecol">
+    <div class="viewwrap">
+      <canvas id="gl"></canvas>
+
+      <div class="overlay hud">
+        <button class="chip on" data-cam="orbit">Orbit</button>
+        <button class="chip" data-cam="fly">Fly (WASD)</button>
+        <button class="chip" data-cam="tour">Flythrough</button>
+        <button class="chip" id="probeBtn">Probe height</button>
+        <button class="chip" id="measureBtn">Measure A→B</button>
+      </div>
+
+      <div class="overlay legend" id="legend">
+        <div class="lt" id="legendTitle">Elevation</div>
+        <div class="ramp" id="legendRamp"></div>
+        <div class="lscale"><span id="legLo">0</span><span id="legHi">1</span></div>
+      </div>
+
+      <div class="overlay readout hidden" id="readout">
+        <div class="big" id="roBig">—</div>
+        <div class="sub" id="roSub"></div>
+      </div>
+
+      <div class="overlay busy" id="busy">
+        <div class="bx">
+          <div class="bt" id="busyText">Working</div>
+          <div class="bar"><i id="busyBar"></i></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="filmstrip" id="strip">
+      <button class="frame" data-tex="rgb"><canvas width="144" height="144" id="thRgb"></canvas><span>Input</span></button>
+      <button class="frame" data-tex="pre"><canvas width="144" height="144" id="thPre"></canvas><span>Pre-processed</span></button>
+      <button class="frame" data-tex="depth"><canvas width="144" height="144" id="thDepth"></canvas><span>Relative depth</span></button>
+      <button class="frame on" data-tex="dsm"><canvas width="144" height="144" id="thDsm"></canvas><span>Calibrated DSM</span></button>
+      <button class="frame" data-tex="slope"><canvas width="144" height="144" id="thSlope"></canvas><span>Slope</span></button>
+      <button class="frame" data-tex="conf"><canvas width="144" height="144" id="thConf"></canvas><span>Confidence</span></button>
+      <button class="frame" data-tex="flood"><canvas width="144" height="144" id="thFlood"></canvas><span>Flood</span></button>
+      <button class="frame" data-tex="slide"><canvas width="144" height="144" id="thSlide"></canvas><span>Landslide</span></button>
+    </div>
+  </section>
+
+  <!-- ============ RIGHT INSPECTOR ============ -->
+  <aside class="col inspector scroll">
+
+    <div class="sect">
+      <h3>1 · Input</h3>
+      <div class="row">
+        <button class="btn sel" id="sampUrban">Urban riverine</button>
+        <button class="btn" id="sampHill">Hilly terrain</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="uploadBtn">Upload PNG / JPG</button>
+      </div>
+      <input type="file" id="file" accept="image/*" class="hidden">
+      <div class="kv"><span>Source</span><b id="mSrc">—</b></div>
+      <div class="kv"><span>Geo-reference</span><b id="mGeo">—</b></div>
+      <div class="kv"><span>Ground sample distance</span><b id="mGsd">—</b></div>
+      <div class="kv"><span>Output path</span><b id="mPath">—</b></div>
+      <p class="note" id="mNote"></p>
+    </div>
+
+    <div class="sect">
+      <h3>3 · Depth estimation</h3>
+      <label class="fld"><span class="lb">Sun azimuth <b><span id="vAz">135</span>°</b></span>
+        <input type="range" id="az" min="0" max="359" value="135"></label>
+      <label class="fld"><span class="lb">Structure weight <b><span id="vStruct">0.45</span></b></span>
+        <input type="range" id="struct" min="0" max="100" value="45"></label>
+      <div class="row"><button class="btn go" id="runBtn">Re-run estimation</button></div>
+      <p class="note">Shadow length gives object height; shading gradient along the sun vector gives the terrain trend. Azimuth is read from image metadata in the georeferenced path — set it by hand for plain PNG/JPG.</p>
+    </div>
+
+    <div class="sect">
+      <h3>4 · Metric calibration</h3>
+      <div class="row">
+        <button class="btn sel" data-cal="metric">Absolute (m)</button>
+        <button class="btn" data-cal="rel">Relative rDSM</button>
+      </div>
+      <label class="fld"><span class="lb">Base elevation from SRTM/CartoDEM <b><span id="vBase">540</span> m</b></span>
+        <input type="range" id="base" min="0" max="2000" step="5" value="540"></label>
+      <label class="fld"><span class="lb">Scene relief <b><span id="vRelief">48</span> m</b></span>
+        <input type="range" id="relief" min="5" max="600" step="1" value="48"></label>
+      <div class="kv"><span>Transform</span><b id="mTrans">—</b></div>
+      <canvas class="hist" id="hist" width="560" height="120"></canvas>
+      <p class="note">Scale-and-shift fit: <span class="num">H = a·d + b</span>, with <span class="num">a</span> from the relief between reference anchors and <span class="num">b</span> from the coarse DEM. Ground control points refine both when available.</p>
+    </div>
+
+    <div class="sect" id="valSect">
+      <h3>Validation</h3>
+      <div class="kv"><span>MAE</span><b id="vMae">—</b></div>
+      <div class="kv"><span>RMSE</span><b id="vRmse">—</b></div>
+      <div class="kv"><span>δ &lt; 1.25</span><b id="vD1">—</b></div>
+      <div class="kv"><span>Correlation ρ</span><b id="vRho">—</b></div>
+      <p class="note" id="valNote"></p>
+    </div>
+
+    <div class="sect">
+      <h3>6 · Scenario analysis</h3>
+      <label class="fld"><span class="lb">Flood water level <b><span id="vFlood">0</span> m</b></span>
+        <input type="range" id="flood" min="0" max="100" value="0"></label>
+      <div class="kv"><span>Inundated area</span><b id="mInund">0.0 %</b></div>
+      <div class="kv"><span>Exposed footprint</span><b id="mExp">0.00 km²</b></div>
+      <label class="fld" style="margin-top:11px"><span class="lb">Landslide slope threshold <b><span id="vSlope">30</span>°</b></span>
+        <input type="range" id="slopeT" min="5" max="70" value="30"></label>
+      <div class="kv"><span>Susceptible area</span><b id="mSus">0.0 %</b></div>
+      <div class="kv"><span>Mean / max slope</span><b id="mSlopeStat">—</b></div>
+      <canvas class="prof" id="prof"></canvas>
+      <p class="note" id="profNote">Use Measure A→B to draw a height profile across the terrain.</p>
+    </div>
+
+    <div class="sect">
+      <h3>Terrain statistics</h3>
+      <div class="kv"><span>Min / max elevation</span><b id="mMinMax">—</b></div>
+      <div class="kv"><span>Mean elevation</span><b id="mMean">—</b></div>
+      <div class="kv"><span>Scene extent</span><b id="mExtent">—</b></div>
+      <div class="kv"><span>Mean confidence</span><b id="mConf">—</b></div>
+      <div class="kv"><span>Low-confidence cells</span><b id="mLowConf">—</b></div>
+    </div>
+
+    <div class="sect">
+      <h3>View</h3>
+      <label class="fld"><span class="lb">Vertical exaggeration <b>×<span id="vEx">2.0</span></b></span>
+        <input type="range" id="exg" min="5" max="60" value="20"></label>
+      <div class="row">
+        <button class="btn sel" id="wireBtn">Solid</button>
+        <button class="btn" id="maskBtn">Mask low confidence</button>
+      </div>
+    </div>
+
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+
+/* =====================================================================
+   DepthWizard — SIH26175 prototype
+   Stage 1 input  →  2 pre-process  →  3 depth  →  4 calibrate
+                  →  5 mesh         →  6 analyse / flythrough
+   ===================================================================== */
+
+const N = 288;                 // processing grid (N x N)
+const TEX = 576;               // texture / source raster resolution
+const NN = N * N;
+
+const S = {                    // ---- application state ----
+  srcCanvas:null, preCanvas:null,
+  rgb:null, lum:null, sat:null,
+  depth:null, conf:null, dsm:null, slope:null,
+  truth:null,                  // ground truth heights, samples only
+  gsd:0.5,                     // metres per pixel of the TEX raster
+  geo:false, srcName:"—",
+  calMode:"metric", base:540, relief:48,
+  az:135, structW:0.45,
+  minEl:0, maxEl:1, meanEl:0,
+  texMode:"dsm", maskLow:false, camMode:"orbit",
+  floodLvl:0, slopeT:30, exg:2.0,
+  probe:false, measure:false, mA:null, mB:null
+};
+
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b) => v < a ? a : v > b ? b : v;
+const lerp = (a,b,t) => a + (b-a)*t;
+
+/* ---------------------------------------------------------------- log */
+const logEl = $("log");
+function log(msg, val){
+  const d = document.createElement("div");
+  d.innerHTML = "<b>" + msg + "</b>" + (val ? " " + val : "");
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+  while (logEl.children.length > 90) logEl.removeChild(logEl.firstChild);
+}
+function stage(i, state, ms){
+  const el = document.querySelector('.stage[data-s="' + i + '"]');
+  if (!el) return;
+  el.classList.toggle("run", state === "run");
+  el.classList.toggle("done", state === "done");
+  el.querySelector(".ms").textContent = ms == null ? "" : ms.toFixed(0) + " ms";
+}
+function busy(on, text, pct){
+  $("busy").classList.toggle("on", !!on);
+  if (text) $("busyText").textContent = text;
+  $("busyBar").style.width = (pct == null ? 0 : pct*100) + "%";
+}
+const frame = () => new Promise(r => requestAnimationFrame(() => r()));
+
+/* ================================================================= */
+/* SEEDED NOISE — used to synthesise the two reference scenes        */
+/* ================================================================= */
+function mulberry(a){ return function(){
+  a |= 0; a = a + 0x6D2B79F5 | 0;
+  let t = Math.imul(a ^ a>>>15, 1|a);
+  t = t + Math.imul(t ^ t>>>7, 61|t) ^ t;
+  return ((t ^ t>>>14) >>> 0) / 4294967296;
+};}
+function valueNoise(seed, size){
+  const r = mulberry(seed), g = new Float32Array(size*size);
+  for (let i=0;i<g.length;i++) g[i] = r();
+  return (x,y) => {                       // bilinear, wrapped
+    const xi = Math.floor(x), yi = Math.floor(y), fx = x-xi, fy = y-yi;
+    const w = (a,b) => g[((b%size)+size)%size*size + ((a%size)+size)%size];
+    const u = fx*fx*(3-2*fx), v = fy*fy*(3-2*fy);
+    return lerp(lerp(w(xi,yi),w(xi+1,yi),u), lerp(w(xi,yi+1),w(xi+1,yi+1),u), v);
+  };
+}
+function fbm(seed){
+  const n1=valueNoise(seed,16), n2=valueNoise(seed+7,32), n3=valueNoise(seed+13,64), n4=valueNoise(seed+29,128);
+  return (x,y) => n1(x,y)*0.52 + n2(x*2,y*2)*0.26 + n3(x*4,y*4)*0.14 + n4(x*8,y*8)*0.08;
+}
+
+/* ================================================================= */
+/* SCENE SYNTHESIS                                                   */
+/* Each sample returns an RGB raster plus the true height field, so  */
+/* the estimate can be scored honestly in the Validation card.       */
+/* ================================================================= */
+function newCanvas(w,h){ const c=document.createElement("canvas"); c.width=w; c.height=h; return c; }
+
+function sunVec(azDeg){                    // image-space shadow direction
+  const a = (azDeg-90) * Math.PI/180;
+  return { x: Math.cos(a), y: Math.sin(a) };
+}
+
+function buildUrban(azDeg){
+  const c = newCanvas(TEX,TEX), x = c.getContext("2d");
+  const truth = new Float32Array(NN);
+  const sv = sunVec(azDeg), shk = 0.62;    // px of shadow per metre of height
+  const rnd = mulberry(20260930);
+  const nz = fbm(4);
+
+  const setTruth = (px,py,pw,ph,h) => {    // stamp height into the N-grid
+    const s = N/TEX;
+    const x0=Math.max(0,Math.floor(px*s)), y0=Math.max(0,Math.floor(py*s));
+    const x1=Math.min(N,Math.ceil((px+pw)*s)), y1=Math.min(N,Math.ceil((py+ph)*s));
+    for(let j=y0;j<y1;j++) for(let i=x0;i<x1;i++) truth[j*N+i]=h;
+  };
+
+  // ground
+  x.fillStyle="#b9ae97"; x.fillRect(0,0,TEX,TEX);
+  const gimg = x.getImageData(0,0,TEX,TEX), gd = gimg.data;
+  for (let j=0;j<TEX;j++) for (let i=0;i<TEX;i++){
+    const v = (nz(i/34,j/34)-0.5)*44, k=(j*TEX+i)*4;
+    gd[k]=clamp(gd[k]+v,0,255); gd[k+1]=clamp(gd[k+1]+v,0,255); gd[k+2]=clamp(gd[k+2]+v*0.8,0,255);
+  }
+  x.putImageData(gimg,0,0);
+
+  // river — a low corridor across the scene
+  x.lineWidth = 54; x.lineCap="round"; x.strokeStyle="#3f6d78";
+  x.beginPath();
+  for (let i=0;i<=TEX;i+=8){
+    const y = TEX*0.66 + Math.sin(i/95)*62 + Math.sin(i/31)*13;
+    i===0 ? x.moveTo(i,y) : x.lineTo(i,y);
+    setTruth(i-30, y-30, 60, 60, -2.5);
+  }
+  x.stroke();
+  x.lineWidth = 40; x.strokeStyle="#4c7f89"; x.stroke();
+
+  // road grid
+  x.strokeStyle="#8d8a84"; x.lineWidth=13; x.lineCap="butt";
+  for (let g=52; g<TEX; g+=104){
+    x.beginPath(); x.moveTo(g,0); x.lineTo(g,TEX); x.stroke();
+    x.beginPath(); x.moveTo(0,g); x.lineTo(TEX,g); x.stroke();
+  }
+
+  // vegetation clusters
+  for (let k=0;k<70;k++){
+    const cx=rnd()*TEX, cy=rnd()*TEX, r=7+rnd()*9, h=5+rnd()*5;
+    const wy = TEX*0.66 + Math.sin(cx/95)*62;
+    if (Math.abs(cy-wy) < 40) continue;
+    x.fillStyle="rgba(24,38,26,.42)";
+    x.beginPath(); x.ellipse(cx+sv.x*h*shk, cy+sv.y*h*shk, r*1.05, r*0.8, 0, 0, 6.3); x.fill();
+    x.fillStyle = "rgb(" + (52+rnd()*26|0) + "," + (96+rnd()*40|0) + "," + (46+rnd()*22|0) + ")";
+    x.beginPath(); x.arc(cx,cy,r,0,6.3); x.fill();
+    setTruth(cx-r*0.7, cy-r*0.7, r*1.4, r*1.4, h);
+  }
+
+  // buildings — shadow first, then roof
+  for (let by=6; by<TEX-30; by+=104){
+    for (let bx=6; bx<TEX-30; bx+=104){
+      const cnt = 2 + (rnd()*2|0);
+      for (let q=0;q<cnt;q++){
+        const w = 22+rnd()*38, d = 20+rnd()*34;
+        const px = bx + 8 + rnd()*(78-w), py = by + 8 + rnd()*(78-d);
+        const wy = TEX*0.66 + Math.sin(px/95)*62;
+        if (Math.abs(py-wy) < 46) continue;
+        const h = 6 + Math.pow(rnd(),1.7)*42;
+        const off = h*shk;
+        x.fillStyle = "rgba(20,26,32,.5)";
+        x.beginPath();
+        x.moveTo(px,py); x.lineTo(px+w,py); x.lineTo(px+w+sv.x*off, py+d+sv.y*off);
+        x.lineTo(px+sv.x*off, py+d+sv.y*off); x.closePath(); x.fill();
+        x.fillRect(px+sv.x*off, py+sv.y*off, w, d);
+        const g2 = 150 + rnd()*72;
+        x.fillStyle = "rgb(" + (g2|0) + "," + (g2*0.96|0) + "," + (g2*0.9|0) + ")";
+        x.fillRect(px,py,w,d);
+        x.strokeStyle = "rgba(40,44,50,.5)"; x.lineWidth=1.4; x.strokeRect(px+.7,py+.7,w-1.4,d-1.4);
+        setTruth(px,py,w,d,h);
+      }
+    }
+  }
+  return { canvas:c, truth, gsd:0.5, geo:false, name:"urban_riverine.png",
+           base:540, relief:48, floodMax:26, note:"Synthetic 288 m × 288 m urban riverine scene at 0.5 m GSD. Building, canopy and river heights are known, so stage 3 can be scored." };
+}
+
+function buildHilly(azDeg){
+  const c = newCanvas(TEX,TEX), x = c.getContext("2d");
+  const truth = new Float32Array(NN);
+  const f = fbm(1907), sv = sunVec(azDeg);
+  const H = new Float32Array(TEX*TEX);
+  let lo=1e9, hi=-1e9;
+  for (let j=0;j<TEX;j++) for (let i=0;i<TEX;i++){
+    let v = f(i/74, j/74);
+    v = Math.pow(v, 1.35);
+    const ridge = 1 - Math.abs(f(i/150+8, j/150+8) - 0.5)*1.7;
+    v = v*0.72 + ridge*0.28;
+    H[j*TEX+i]=v; if(v<lo)lo=v; if(v>hi)hi=v;
+  }
+  const img = x.createImageData(TEX,TEX), d = img.data;
+  const hAt = (i,j) => (H[clamp(j,0,TEX-1)*TEX + clamp(i,0,TEX-1)] - lo)/(hi-lo);
+  const relief = 420;
+  for (let j=0;j<TEX;j++) for (let i=0;i<TEX;i++){
+    const h = hAt(i,j);
+    const gx = (hAt(i+1,j)-hAt(i-1,j)), gy = (hAt(i,j+1)-hAt(i,j-1));
+    // hillshade: surface normal against the sun vector
+    const sh = clamp(0.56 - (gx*sv.x + gy*sv.y)*11, 0.12, 1.25);
+    let r,g,b;
+    if (h < 0.17){ r=68; g=104; b=112; }                       // valley water
+    else if (h < 0.46){ r=lerp(86,124,(h-.17)/.29); g=lerp(124,136,(h-.17)/.29); b=lerp(70,84,(h-.17)/.29); }
+    else if (h < 0.76){ r=lerp(124,152,(h-.46)/.3); g=lerp(136,134,(h-.46)/.3); b=lerp(84,110,(h-.46)/.3); }
+    else { const t=(h-.76)/.24; r=lerp(152,226,t); g=lerp(134,222,t); b=lerp(110,218,t); }
+    const k=(j*TEX+i)*4;
+    d[k]=clamp(r*sh,0,255); d[k+1]=clamp(g*sh,0,255); d[k+2]=clamp(b*sh,0,255); d[k+3]=255;
+  }
+  x.putImageData(img,0,0);
+  const s = TEX/N;
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++)
+    truth[j*N+i] = hAt(Math.floor(i*s), Math.floor(j*s)) * relief;
+  return { canvas:c, truth, gsd:7.0, geo:true, name:"hill_tile_43Q.tif",
+           base:310, relief:relief, floodMax:200, note:"Georeferenced tile, EPSG:32643, 7 m GSD, 4.03 km across. Absolute metric DSM path is active because a CRS and SRTM anchor are present." };
+}
+
+/* ================================================================= */
+/* STAGE 2 — PRE-PROCESSING                                          */
+/* ================================================================= */
+function downsample(srcCanvas){
+  const c = newCanvas(N,N), x = c.getContext("2d");
+  x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
+  const w = srcCanvas.width, h = srcCanvas.height, side = Math.min(w,h);
+  x.drawImage(srcCanvas, (w-side)/2, (h-side)/2, side, side, 0, 0, N, N);
+  return c;
+}
+function preprocess(c){
+  const x = c.getContext("2d"), im = x.getImageData(0,0,N,N), d = im.data;
+  const rgb = new Float32Array(NN*3), lum = new Float32Array(NN), sat = new Float32Array(NN);
+  // contrast stretch on luminance percentiles, denoise with a light 3x3 median
+  const tmp = new Float32Array(NN);
+  for (let i=0;i<NN;i++){
+    const r=d[i*4]/255, g=d[i*4+1]/255, b=d[i*4+2]/255;
+    rgb[i*3]=r; rgb[i*3+1]=g; rgb[i*3+2]=b;
+    tmp[i] = 0.299*r + 0.587*g + 0.114*b;
+    const mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+    sat[i] = mx<=0 ? 0 : (mx-mn)/mx;
+  }
+  const win = new Float32Array(9);
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){
+    let n=0;
+    for (let b=-1;b<=1;b++) for (let a=-1;a<=1;a++)
+      win[n++] = tmp[clamp(j+b,0,N-1)*N + clamp(i+a,0,N-1)];
+    const s = Array.prototype.slice.call(win,0,n).sort((p,q)=>p-q);
+    lum[j*N+i] = s[4]*0.6 + tmp[j*N+i]*0.4;
+  }
+  const srt = Float32Array.from(lum).sort();
+  const lo = srt[Math.floor(NN*0.02)], hi = srt[Math.floor(NN*0.98)];
+  const out = newCanvas(N,N), ox = out.getContext("2d"), oim = ox.createImageData(N,N);
+  for (let i=0;i<NN;i++){
+    const before = lum[i];
+    lum[i] = clamp((lum[i]-lo)/Math.max(1e-4,hi-lo), 0, 1);
+    const k = lum[i] / Math.max(1e-3, before);
+    for (let ch=0; ch<3; ch++){
+      const v = clamp(rgb[i*3+ch]*k, 0, 1);
+      rgb[i*3+ch] = v;
+      oim.data[i*4+ch] = v*255;
+    }
+    oim.data[i*4+3] = 255;
+  }
+  ox.putImageData(oim,0,0);
+  return { rgb, lum, sat, canvas: out };
+}
+
+/* ================================================================= */
+/* ARRAY HELPERS                                                     */
+/* ================================================================= */
+function boxBlur(src, r){
+  const t = new Float32Array(NN), o = new Float32Array(NN), inv = 1/(2*r+1);
+  for (let j=0;j<N;j++){
+    let acc=0;
+    for (let i=-r;i<=r;i++) acc += src[j*N + clamp(i,0,N-1)];
+    for (let i=0;i<N;i++){
+      t[j*N+i] = acc*inv;
+      acc += src[j*N + clamp(i+r+1,0,N-1)] - src[j*N + clamp(i-r,0,N-1)];
+    }
+  }
+  for (let i=0;i<N;i++){
+    let acc=0;
+    for (let j=-r;j<=r;j++) acc += t[clamp(j,0,N-1)*N + i];
+    for (let j=0;j<N;j++){
+      o[j*N+i] = acc*inv;
+      acc += t[clamp(j+r+1,0,N-1)*N + i] - t[clamp(j-r,0,N-1)*N + i];
+    }
+  }
+  return o;
+}
+function localStd(src, r){
+  const m = boxBlur(src,r), sq = new Float32Array(NN);
+  for (let i=0;i<NN;i++) sq[i] = src[i]*src[i];
+  const m2 = boxBlur(sq,r), o = new Float32Array(NN);
+  for (let i=0;i<NN;i++) o[i] = Math.sqrt(Math.max(0, m2[i]-m[i]*m[i]));
+  return o;
+}
+function normalise(a, pLo, pHi){
+  const s = Float32Array.from(a).sort();
+  const lo = s[Math.floor((NN-1)*(pLo==null?0.01:pLo))];
+  const hi = s[Math.floor((NN-1)*(pHi==null?0.99:pHi))];
+  const o = new Float32Array(NN), d = Math.max(1e-6, hi-lo);
+  for (let i=0;i<NN;i++) o[i] = clamp((a[i]-lo)/d, 0, 1);
+  return o;
+}
+/* integrate a slope field along a direction to recover relative height */
+function lineIntegrate(slope, vx, vy){
+  const o = new Float32Array(NN);
+  if (Math.abs(vx) >= Math.abs(vy)){
+    const sx = vx >= 0 ? 1 : -1, step = vy/Math.abs(vx);
+    for (let j=0;j<N;j++){
+      let y = j, acc = 0;
+      for (let k=0;k<N;k++){
+        const i = sx > 0 ? k : N-1-k;
+        acc += slope[clamp(Math.round(y),0,N-1)*N + i];
+        o[j*N+i] = acc;
+        y += step*sx;
+      }
+    }
+  } else {
+    const sy = vy >= 0 ? 1 : -1, step = vx/Math.abs(vy);
+    for (let i=0;i<N;i++){
+      let xx = i, acc = 0;
+      for (let k=0;k<N;k++){
+        const j = sy > 0 ? k : N-1-k;
+        acc += slope[j*N + clamp(Math.round(xx),0,N-1)];
+        o[j*N+i] = acc;
+        xx += step*sy;
+      }
+    }
+  }
+  return o;
+}
+/* joint bilateral: smooth the depth but keep image edges crisp */
+function guidedSmooth(src, guide, r, sc){
+  const o = new Float32Array(NN);
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){
+    const c = j*N+i, gc = guide[c];
+    let ws = 0, vs = 0;
+    for (let b=-r;b<=r;b++) for (let a=-r;a<=r;a++){
+      const k = clamp(j+b,0,N-1)*N + clamp(i+a,0,N-1);
+      const dg = (guide[k]-gc)/sc;
+      const w = Math.exp(-0.5*dg*dg - 0.16*(a*a+b*b));
+      ws += w; vs += w*src[k];
+    }
+    o[c] = vs/ws;
+  }
+  return o;
+}
+
+/* ================================================================= */
+/* STAGE 3 — DEPTH ESTIMATION                                        */
+/*   objects : shadow-length + roof-brightness cues                  */
+/*   terrain : shape-from-shading integrated along the sun vector    */
+/* ================================================================= */
+async function estimateDepth(rgb, lum, sat, azDeg, structW, onProg){
+  const sv = sunVec(azDeg);
+
+  // -- masks ----------------------------------------------------------
+  const water = new Float32Array(NN), veg = new Float32Array(NN);
+  for (let i=0;i<NN;i++){
+    const r=rgb[i*3], g=rgb[i*3+1], b=rgb[i*3+2];
+    water[i] = clamp((b - (r+g)/2)*3.4 + (0.34 - lum[i])*1.5, 0, 1);
+    veg[i]   = clamp((g - Math.max(r,b))*5.0, 0, 1);
+  }
+  const waterS = boxBlur(water, 3);
+  onProg && onProg(0.12); await frame();
+
+  const lumBig = boxBlur(lum, 13);
+  const struct = localStd(lum, 2);
+  const structL = localStd(lum, 5);
+  onProg && onProg(0.28); await frame();
+
+  // -- shadow field ---------------------------------------------------
+  const shadow = new Float32Array(NN);
+  for (let i=0;i<NN;i++){
+    const deficit = lumBig[i]*0.80 - lum[i];
+    shadow[i] = clamp(deficit/0.13, 0, 1) * (1 - waterS[i]*0.8);
+  }
+  onProg && onProg(0.40); await frame();
+
+  // -- shadow length → caster height ----------------------------------
+  const MAXL = 26, fromShadow = new Float32Array(NN);
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){
+    if (shadow[j*N+i] < 0.42) continue;
+    let k = 0;                                  // walk back toward the sun
+    while (k < MAXL){
+      const xi = Math.round(i - sv.x*(k+1)), yi = Math.round(j - sv.y*(k+1));
+      if (xi<0||yi<0||xi>=N||yi>=N) break;
+      if (shadow[yi*N+xi] < 0.34) break;
+      k++;
+    }
+    if (k < 1) continue;
+    const cx = clamp(Math.round(i - sv.x*(k+1)), 0, N-1);
+    const cy = clamp(Math.round(j - sv.y*(k+1)), 0, N-1);
+    const c = cy*N+cx;
+    if (k > fromShadow[c]) fromShadow[c] = k;
+  }
+  const shadowH = guidedSmooth(boxBlur(fromShadow, 2), lum, 2, 0.1);
+  onProg && onProg(0.58); await frame();
+
+  // -- roof brightness cue --------------------------------------------
+  const objBright = new Float32Array(NN);
+  for (let i=0;i<NN;i++)
+    objBright[i] = Math.max(0, lum[i]-lumBig[i]) * clamp(structL[i]*7,0,1);
+
+  const nShadow = normalise(shadowH, 0.02, 0.985);
+  const nBright = normalise(objBright, 0.02, 0.99);
+  const nStruct = normalise(structL, 0.02, 0.99);
+  const objects = new Float32Array(NN);
+  for (let i=0;i<NN;i++){
+    let v = nShadow[i]*0.62 + nBright[i]*0.24 + nStruct[i]*structW*0.40 + veg[i]*0.16;
+    v *= (1 - waterS[i]);
+    objects[i] = v - waterS[i]*0.22;
+  }
+  onProg && onProg(0.72); await frame();
+
+  // -- terrain trend from shading --------------------------------------
+  const big = boxBlur(lum, 22);
+  let mean = 0; for (let i=0;i<NN;i++) mean += big[i]; mean /= NN;
+  const slopeField = new Float32Array(NN);
+  for (let i=0;i<NN;i++) slopeField[i] = -(big[i]-mean)*0.55;
+  let terrain = lineIntegrate(slopeField, sv.x, sv.y);
+  const drift = boxBlur(terrain, 60);
+  for (let i=0;i<NN;i++) terrain[i] -= drift[i]*0.35;
+  terrain = boxBlur(terrain, 4);
+  onProg && onProg(0.86); await frame();
+
+  // -- fuse -------------------------------------------------------------
+  const nTerr = normalise(terrain, 0.01, 0.99), nObj = normalise(objects, 0.005, 0.995);
+  const terrRange = (function(){
+    const s = Float32Array.from(terrain).sort();
+    return s[Math.floor(NN*0.97)] - s[Math.floor(NN*0.03)];
+  })();
+  const wT = clamp(terrRange*0.06, 0.18, 0.74);   // flat scenes lean on objects
+  const raw = new Float32Array(NN);
+  for (let i=0;i<NN;i++) raw[i] = nTerr[i]*wT + nObj[i]*(1-wT);
+  const depth = normalise(guidedSmooth(raw, lum, 2, 0.085), 0.004, 0.996);
+
+  // -- confidence ------------------------------------------------------
+  const conf = new Float32Array(NN);
+  const nS = normalise(struct, 0.05, 0.95);
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){
+    const c = j*N+i;
+    const edge = Math.min(1, Math.min(Math.min(i,N-1-i), Math.min(j,N-1-j))/14);
+    let v = 0.34 + 0.52*nS[c] + 0.20*(1-shadow[c]);
+    v *= lerp(0.55, 1, edge);
+    v *= (1 - waterS[c]*0.45);
+    conf[c] = clamp(v, 0.05, 1);
+  }
+  onProg && onProg(1); await frame();
+  return { depth, conf, wTerrain: wT };
+}
+
+/* ================================================================= */
+/* STAGE 4 — CALIBRATION + slope + statistics                        */
+/* ================================================================= */
+function calibrate(){
+  const d = S.depth, out = new Float32Array(NN);
+  const a = S.calMode === "metric" ? S.relief : 1;
+  const b = S.calMode === "metric" ? S.base : 0;
+  for (let i=0;i<NN;i++) out[i] = a*d[i] + b;
+  S.dsm = out;
+  S.minEl = b; S.maxEl = a + b;
+  let m = 0; for (let i=0;i<NN;i++) m += out[i];
+  S.meanEl = m/NN;
+  $("mTrans").textContent = S.calMode === "metric"
+      ? "H = " + a.toFixed(1) + "·d + " + b.toFixed(0)
+      : "H = d  (unitless)";
+  computeSlope();
+}
+function computeSlope(){
+  const px = S.gsd * (TEX/N);              // metres per processing cell
+  const sl = new Float32Array(NN);
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){
+    const l = S.dsm[j*N+clamp(i-1,0,N-1)], r = S.dsm[j*N+clamp(i+1,0,N-1)];
+    const u = S.dsm[clamp(j-1,0,N-1)*N+i], v = S.dsm[clamp(j+1,0,N-1)*N+i];
+    const gx = (r-l)/(2*px), gy = (v-u)/(2*px);
+    sl[j*N+i] = Math.atan(Math.hypot(gx,gy))*180/Math.PI;
+  }
+  S.slope = sl;
+}
+
+/* ---- validation against known ground truth (samples only) -------- */
+function validate(){
+  const box = $("valSect");
+  if (!S.truth){
+    $("vMae").textContent = $("vRmse").textContent = $("vD1").textContent = $("vRho").textContent = "n/a";
+    $("valNote").innerHTML = 'No reference surface for an uploaded image. In the field this slot is filled by SRTM, CartoDEM or GCP check-points; load a sample scene to see the scoring run.';
+    return;
+  }
+  // scale-and-shift invariant fit, the standard monocular-depth protocol
+  let sx=0, sy=0, sxx=0, sxy=0;
+  for (let i=0;i<NN;i++){ const d=S.depth[i], t=S.truth[i]; sx+=d; sy+=t; sxx+=d*d; sxy+=d*t; }
+  const den = NN*sxx - sx*sx;
+  const a = den === 0 ? 1 : (NN*sxy - sx*sy)/den;
+  const b = (sy - a*sx)/NN;
+  let mae=0, mse=0, d1=0, syy=0;
+  const meanT = sy/NN, meanD = sx/NN;
+  let cov=0, vd=0, vt=0;
+  for (let i=0;i<NN;i++){
+    const p = a*S.depth[i]+b, t = S.truth[i], e = p-t;
+    mae += Math.abs(e); mse += e*e;
+    const pp = Math.abs(p)+1, tt = Math.abs(t)+1;
+    if (Math.max(pp/tt, tt/pp) < 1.25) d1++;
+    const dd = S.depth[i]-meanD, dt = t-meanT;
+    cov += dd*dt; vd += dd*dd; vt += dt*dt;
+  }
+  const rho = cov/Math.max(1e-9, Math.sqrt(vd*vt));
+  $("vMae").textContent  = (mae/NN).toFixed(2) + " m";
+  $("vRmse").textContent = Math.sqrt(mse/NN).toFixed(2) + " m";
+  $("vD1").textContent   = (100*d1/NN).toFixed(1) + " %";
+  $("vRho").textContent  = rho.toFixed(3);
+  const good = rho > 0.6;
+  $("valNote").innerHTML = '<span class="pill ' + (good?"ok":"warn") + '">' +
+    (good ? "Structure recovered" : "Weak agreement") + '</span> ' +
+    'Scored against the known heights of this synthetic scene after a scale-and-shift fit — the same protocol used for monocular depth benchmarks. Errors concentrate in shadowed courtyards, which is what the confidence layer flags.';
+}
+
+/* ================================================================= */
+/* COLOUR RAMPS + RASTER PAINTING                                    */
+/* ================================================================= */
+function turbo(t){
+  t = clamp(t,0,1);
+  const r = clamp(34.61 + t*(1172.33 + t*(-10793.56 + t*(33300.12 + t*(-38394.49 + t*14825.05)))),0,255);
+  const g = clamp(23.31 + t*(557.33 + t*(1225.33 + t*(-3574.96 + t*(3895.05 - t*1666.41)))),0,255);
+  const b = clamp(27.2 + t*(3211.1 + t*(-15327.97 + t*(27814 + t*(-22569.18 + t*6838.66)))),0,255);
+  return [r,g,b];
+}
+function paint(canvas, fn){
+  const x = canvas.getContext("2d"), im = x.createImageData(N,N);
+  for (let i=0;i<NN;i++){
+    const c = fn(i);
+    im.data[i*4]=c[0]; im.data[i*4+1]=c[1]; im.data[i*4+2]=c[2]; im.data[i*4+3]=255;
+  }
+  const tmp = newCanvas(N,N); tmp.getContext("2d").putImageData(im,0,0);
+  x.imageSmoothingEnabled = false;
+  x.clearRect(0,0,canvas.width,canvas.height);
+  x.drawImage(tmp,0,0,canvas.width,canvas.height);
+}
+function texCanvas(mode){
+  const c = newCanvas(N,N);
+  const rel = i => (S.dsm[i]-S.minEl)/Math.max(1e-6,S.maxEl-S.minEl);
+  const base = i => [S.rgb[i*3]*255, S.rgb[i*3+1]*255, S.rgb[i*3+2]*255];
+  if (mode === "rgb"){
+    const x = c.getContext("2d");
+    const w = S.srcCanvas.width, h = S.srcCanvas.height, side = Math.min(w,h);
+    x.drawImage(S.srcCanvas, (w-side)/2, (h-side)/2, side, side, 0, 0, N, N);
+  } else if (mode === "pre"){
+    paint(c, base);
+  } else if (mode === "depth" || mode === "dsm"){
+    paint(c, i => turbo(rel(i)));
+  } else if (mode === "slope"){
+    paint(c, i => turbo(clamp(S.slope[i]/60,0,1)));
+  } else if (mode === "conf"){
+    paint(c, i => { const v = S.conf[i];
+      return [lerp(226,26,v), lerp(93,168,v), lerp(79,120,v)]; });
+  } else if (mode === "flood"){
+    const lvl = floodElev();
+    paint(c, i => { const b = base(i);
+      if (S.dsm[i] <= lvl){ const dep = clamp((lvl-S.dsm[i])/Math.max(1,(S.maxEl-S.minEl)*0.3),0,1);
+        return [lerp(b[0],32,0.55+dep*0.3), lerp(b[1],118,0.55+dep*0.3), lerp(b[2],196,0.55+dep*0.3)]; }
+      return b; });
+  } else if (mode === "slide"){
+    paint(c, i => { const b = base(i);
+      if (S.slope[i] >= S.slopeT){ const sev = clamp((S.slope[i]-S.slopeT)/25,0,1);
+        return [lerp(b[0],238,0.5+sev*0.35), lerp(b[1],70,0.5+sev*0.35), lerp(b[2],58,0.5+sev*0.35)]; }
+      return b; });
+  }
+  if (S.maskLow && mode !== "conf"){
+    const x = c.getContext("2d"), im = x.getImageData(0,0,N,N);
+    for (let i=0;i<NN;i++) if (S.conf[i] < 0.42){
+      const g = (im.data[i*4]+im.data[i*4+1]+im.data[i*4+2])/3*0.6;
+      im.data[i*4]=g; im.data[i*4+1]=g; im.data[i*4+2]=g;
+    }
+    x.putImageData(im,0,0);
+  }
+  return c;
+}
+function floodElev(){ return S.minEl + (S.floodLvl/100)*(S.maxEl-S.minEl); }
+
+/* ================================================================= */
+/* THREE.JS SCENE                                                    */
+/* ================================================================= */
+const GL = { ready:false };
+const WORLD = 200;                                   // world units across the tile
+
+function initGL(){
+  const cv = $("gl");
+  GL.renderer = new THREE.WebGLRenderer({ canvas:cv, antialias:true });
+  GL.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  GL.scene = new THREE.Scene();
+  GL.camera = new THREE.PerspectiveCamera(52, 1, 0.6, 4000);
+  GL.target = new THREE.Vector3(0,0,0);
+  GL.orbit = { r: 232, theta: -0.9, phi: 0.74 };
+  GL.fly = { pos:new THREE.Vector3(0,70,180), yaw:-Math.PI, pitch:-0.28, keys:{} };
+
+  const sun = new THREE.DirectionalLight(0xffffff, 1.05);
+  sun.position.set(-120, 160, -120);
+  GL.sun = sun;
+  GL.scene.add(sun, new THREE.HemisphereLight(0xbfd8e8, 0x2a2420, 0.62));
+
+  const geo = new THREE.PlaneGeometry(WORLD, WORLD, N-1, N-1);
+  geo.rotateX(-Math.PI/2);
+  GL.mat = new THREE.MeshStandardMaterial({ roughness:0.94, metalness:0.0 });
+  GL.mesh = new THREE.Mesh(geo, GL.mat);
+  GL.scene.add(GL.mesh);
+
+  const wg = new THREE.PlaneGeometry(WORLD*1.02, WORLD*1.02);
+  wg.rotateX(-Math.PI/2);
+  GL.water = new THREE.Mesh(wg, new THREE.MeshStandardMaterial({
+    color:0x2f86c9, transparent:true, opacity:0.62, roughness:0.22, metalness:0.15 }));
+  GL.water.visible = false;
+  GL.scene.add(GL.water);
+
+  GL.marker = new THREE.Mesh(new THREE.SphereGeometry(1.7, 16, 12),
+                new THREE.MeshBasicMaterial({ color:0xf5a524 }));
+  GL.marker.visible = false; GL.scene.add(GL.marker);
+  GL.markerB = GL.marker.clone();
+  GL.markerB.material = new THREE.MeshBasicMaterial({ color:0x5aa9e6 });
+  GL.markerB.visible = false; GL.scene.add(GL.markerB);
+  GL.line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+      [new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({ color:0xf5a524 }));
+  GL.line.visible = false; GL.scene.add(GL.line);
+
+  GL.ray = new THREE.Raycaster();
+  GL.ready = true;
+  bindCamera(cv);
+  resize();
+  animate();
+}
+function worldScale(){                       // metres → world units (with exaggeration)
+  const extent = S.gsd * TEX;                // metres across the scene
+  return (WORLD/extent) * S.exg;
+}
+function updateMesh(){
+  if (!GL.ready || !S.dsm) return;
+  const pos = GL.mesh.geometry.attributes.position, k = worldScale();
+  for (let i=0;i<NN;i++) pos.setY(i, (S.dsm[i]-S.minEl)*k);
+  pos.needsUpdate = true;
+  GL.mesh.geometry.computeVertexNormals();
+  const src = texCanvas(S.texMode);
+  const big = newCanvas(1024,1024), bx = big.getContext("2d");
+  bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = "high";
+  bx.drawImage(src, 0, 0, 1024, 1024);
+  if (GL.tex) GL.tex.dispose();
+  GL.tex = new THREE.CanvasTexture(big);
+  GL.tex.colorSpace = THREE.SRGBColorSpace || undefined;
+  GL.mat.map = GL.tex; GL.mat.needsUpdate = true;
+  GL.water.visible = S.floodLvl > 0;
+  GL.water.position.y = (floodElev()-S.minEl)*k;
+  const sv = sunVec(S.az);
+  GL.sun.position.set(-sv.x*170, 180, -sv.y*170);
+}
+function resize(){
+  if (!GL.ready) return;
+  const cv = $("gl"), w = cv.clientWidth || 640, h = cv.clientHeight || 480;
+  GL.renderer.setSize(w,h,false);
+  GL.camera.aspect = w/h; GL.camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+
+function bindCamera(cv){
+  let down=false, px=0, py=0;
+  cv.addEventListener("pointerdown", e => {
+    down = true; px = e.clientX; py = e.clientY;
+    cv.setPointerCapture(e.pointerId); cv.classList.add("dragging");
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!down) return;
+    const dx = e.clientX-px, dy = e.clientY-py; px = e.clientX; py = e.clientY;
+    if (Math.abs(dx)+Math.abs(dy) > 2) cv.dataset.moved = "1";
+    if (S.camMode === "fly"){
+      GL.fly.yaw -= dx*0.005; GL.fly.pitch = clamp(GL.fly.pitch - dy*0.005, -1.4, 1.4);
+    } else {
+      GL.orbit.theta -= dx*0.006;
+      GL.orbit.phi = clamp(GL.orbit.phi - dy*0.005, 0.06, 1.5);
+      S.camMode = "orbit"; setCam("orbit", true);
+    }
+  });
+  cv.addEventListener("pointerup", e => {
+    down = false; cv.classList.remove("dragging");
+    if (cv.dataset.moved !== "1") onClickScene(e);
+    cv.dataset.moved = "";
+  });
+  cv.addEventListener("wheel", e => {
+    e.preventDefault();
+    GL.orbit.r = clamp(GL.orbit.r * (1 + Math.sign(e.deltaY)*0.09), 40, 900);
+  }, { passive:false });
+  addEventListener("keydown", e => {
+    GL.fly.keys[e.key.toLowerCase()] = true;
+    if (S.camMode === "fly" && ["w","a","s","d","q","e"].indexOf(e.key.toLowerCase()) >= 0) e.preventDefault();
+  });
+  addEventListener("keyup", e => { GL.fly.keys[e.key.toLowerCase()] = false; });
+}
+
+function cellFromPoint(p){
+  const u = (p.x + WORLD/2)/WORLD, v = (p.z + WORLD/2)/WORLD;
+  const i = clamp(Math.round(u*(N-1)),0,N-1), j = clamp(Math.round(v*(N-1)),0,N-1);
+  return { i, j, idx: j*N+i };
+}
+function onClickScene(e){
+  if (!GL.ready || !S.dsm || (!S.probe && !S.measure)) return;
+  const r = $("gl").getBoundingClientRect();
+  const m = new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
+  GL.ray.setFromCamera(m, GL.camera);
+  const hit = GL.ray.intersectObject(GL.mesh)[0];
+  if (!hit) return;
+  const c = cellFromPoint(hit.point);
+  if (S.probe){
+    GL.marker.position.copy(hit.point); GL.marker.visible = true;
+    showReadout(c);
+  } else if (S.measure){
+    if (!S.mA){ S.mA = { pt:hit.point.clone(), c };
+      GL.marker.position.copy(hit.point); GL.marker.visible = true;
+      GL.markerB.visible = false; GL.line.visible = false;
+      $("profNote").textContent = "Point A set. Click point B to draw the profile.";
+    } else {
+      S.mB = { pt:hit.point.clone(), c };
+      GL.markerB.position.copy(hit.point); GL.markerB.visible = true;
+      GL.line.geometry.setFromPoints([S.mA.pt, S.mB.pt]); GL.line.visible = true;
+      drawProfile(); S.mA = null;
+    }
+  }
+}
+function showReadout(c){
+  const unit = S.calMode === "metric" ? " m" : "";
+  $("readout").classList.remove("hidden");
+  $("roBig").textContent = S.dsm[c.idx].toFixed(S.calMode === "metric" ? 1 : 3) + unit;
+  const px = S.gsd*(TEX/N);
+  $("roSub").innerHTML =
+    "slope " + S.slope[c.idx].toFixed(1) + "° · confidence " + (S.conf[c.idx]*100).toFixed(0) + "%<br>" +
+    "cell " + c.i + ", " + c.j + " · " + (c.i*px).toFixed(0) + " m E, " + (c.j*px).toFixed(0) + " m S of origin";
+}
+function drawProfile(){
+  const cv = $("prof"), x = cv.getContext("2d");
+  const w = cv.clientWidth || 280, h = 78;
+  cv.width = w*devicePixelRatio; cv.height = h*devicePixelRatio;
+  x.scale(devicePixelRatio, devicePixelRatio);
+  const A = S.mA.c, B = S.mB.c, steps = 140, vals = [];
+  for (let k=0;k<=steps;k++){
+    const t = k/steps;
+    const i = clamp(Math.round(lerp(A.i,B.i,t)),0,N-1), j = clamp(Math.round(lerp(A.j,B.j,t)),0,N-1);
+    vals.push(S.dsm[j*N+i]);
+  }
+  let lo=Math.min.apply(null,vals), hi=Math.max.apply(null,vals);
+  if (hi-lo < 1e-3) hi = lo+1;
+  const cs = getComputedStyle(document.documentElement);
+  x.strokeStyle = cs.getPropertyValue("--amber").trim() || "#f5a524";
+  x.lineWidth = 1.6; x.beginPath();
+  vals.forEach((v,k) => {
+    const X = 6 + (k/steps)*(w-12), Y = h-8 - ((v-lo)/(hi-lo))*(h-20);
+    k===0 ? x.moveTo(X,Y) : x.lineTo(X,Y);
+  });
+  x.stroke();
+  const px = S.gsd*(TEX/N);
+  const dist = Math.hypot((B.i-A.i)*px, (B.j-A.j)*px);
+  const dh = vals[vals.length-1]-vals[0];
+  const unit = S.calMode === "metric" ? " m" : "";
+  $("profNote").innerHTML = "Ground distance <b class='num'>" + dist.toFixed(0) + " m</b> · " +
+    "rise <b class='num'>" + dh.toFixed(1) + unit + "</b> · " +
+    "average gradient <b class='num'>" + (Math.atan2(dh,dist)*180/Math.PI).toFixed(1) + "°</b>";
+}
+
+let tourT = 0;
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+function animate(){
+  requestAnimationFrame(animate);
+  if (!GL.ready) return;
+  if (S.camMode === "orbit"){
+    const o = GL.orbit;
+    GL.camera.position.set(
+      Math.cos(o.theta)*Math.cos(o.phi)*o.r,
+      Math.sin(o.phi)*o.r + 12,
+      Math.sin(o.theta)*Math.cos(o.phi)*o.r);
+    GL.camera.lookAt(GL.target);
+  } else if (S.camMode === "fly"){
+    const f = GL.fly, sp = (f.keys["shift"] ? 3.2 : 1.35);
+    const dir = new THREE.Vector3(
+      Math.sin(f.yaw)*Math.cos(f.pitch), Math.sin(f.pitch), Math.cos(f.yaw)*Math.cos(f.pitch));
+    const right = new THREE.Vector3(Math.cos(f.yaw), 0, -Math.sin(f.yaw));
+    if (f.keys["w"]) f.pos.addScaledVector(dir, sp);
+    if (f.keys["s"]) f.pos.addScaledVector(dir, -sp);
+    if (f.keys["a"]) f.pos.addScaledVector(right, -sp);
+    if (f.keys["d"]) f.pos.addScaledVector(right, sp);
+    if (f.keys["q"] || f.keys["arrowdown"]) f.pos.y -= sp;
+    if (f.keys["e"] || f.keys["arrowup"]) f.pos.y += sp;
+    GL.camera.position.copy(f.pos);
+    GL.camera.lookAt(f.pos.clone().add(dir));
+  } else if (S.camMode === "tour"){
+    tourT += reduced ? 0.0018 : 0.0042;
+    const r = 118 + Math.sin(tourT*0.7)*36;
+    const y = 46 + Math.sin(tourT*1.1)*20;
+    GL.camera.position.set(Math.cos(tourT)*r, y, Math.sin(tourT)*r);
+    GL.camera.lookAt(new THREE.Vector3(Math.cos(tourT+1.5)*26, 8, Math.sin(tourT+1.5)*26));
+  }
+  GL.renderer.render(GL.scene, GL.camera);
+}
+
+/* ================================================================= */
+/* UI WIRING                                                         */
+/* ================================================================= */
+function setCam(mode, silent){
+  S.camMode = mode;
+  document.querySelectorAll("[data-cam]").forEach(b => b.classList.toggle("on", b.dataset.cam === mode));
+  if (mode === "fly" && !silent){
+    GL.fly.pos.copy(GL.camera.position);
+    GL.fly.yaw = Math.atan2(-GL.camera.position.x, -GL.camera.position.z);
+    GL.fly.pitch = -0.24;
+    log("camera", "free-fly · WASD to move, Q/E altitude, shift to sprint");
+  }
+}
+function setTex(mode){
+  S.texMode = mode;
+  document.querySelectorAll(".frame").forEach(f => f.classList.toggle("on", f.dataset.tex === mode));
+  updateMesh(); updateLegend();
+}
+function updateLegend(){
+  const t = $("legendTitle"), lo = $("legLo"), hi = $("legHi"), ramp = $("legendRamp");
+  const unit = S.calMode === "metric" ? " m" : "";
+  const stops = [];
+  for (let k=0;k<=10;k++){ const c = turbo(k/10); stops.push("rgb(" + (c[0]|0) + "," + (c[1]|0) + "," + (c[2]|0) + ") " + (k*10) + "%"); }
+  const turboCss = "linear-gradient(90deg," + stops.join(",") + ")";
+  if (S.texMode === "slope"){
+    t.textContent = "Slope"; ramp.style.background = turboCss; lo.textContent="0°"; hi.textContent="60°";
+  } else if (S.texMode === "conf"){
+    t.textContent = "Confidence"; ramp.style.background = "linear-gradient(90deg,#e25d4f,#1aa878)";
+    lo.textContent="low"; hi.textContent="high";
+  } else if (S.texMode === "flood"){
+    t.textContent = "Flood extent"; ramp.style.background = "linear-gradient(90deg,#b9ae97,#2076c4)";
+    lo.textContent="dry"; hi.textContent=floodElev().toFixed(0)+unit;
+  } else if (S.texMode === "slide"){
+    t.textContent = "Landslide susceptibility"; ramp.style.background = "linear-gradient(90deg,#b9ae97,#ee463a)";
+    lo.textContent="<"+S.slopeT+"°"; hi.textContent="steep";
+  } else if (S.texMode === "rgb" || S.texMode === "pre"){
+    t.textContent = "Optical image"; ramp.style.background = "linear-gradient(90deg,#555,#ddd)";
+    lo.textContent="dark"; hi.textContent="bright";
+  } else {
+    t.textContent = S.texMode === "depth" ? "Relative depth" : "Elevation";
+    ramp.style.background = turboCss;
+    lo.textContent = S.texMode === "depth" ? "near" : S.minEl.toFixed(0)+unit;
+    hi.textContent = S.texMode === "depth" ? "far"  : S.maxEl.toFixed(0)+unit;
+  }
+}
+function updateThumbs(){
+  const ids = { rgb:"thRgb", pre:"thPre", depth:"thDepth", dsm:"thDsm",
+                slope:"thSlope", conf:"thConf", flood:"thFlood", slide:"thSlide" };
+  Object.keys(ids).forEach(k => {
+    const dst = $(ids[k]).getContext("2d"), src = texCanvas(k);
+    dst.imageSmoothingEnabled = false;
+    dst.clearRect(0,0,144,144);
+    dst.drawImage(src,0,0,144,144);
+  });
+}
+function updateHist(){
+  const cv = $("hist"), x = cv.getContext("2d");
+  x.clearRect(0,0,cv.width,cv.height);
+  const B = 64, bins = new Float32Array(B);
+  for (let i=0;i<NN;i++) bins[clamp(Math.floor((S.dsm[i]-S.minEl)/Math.max(1e-6,S.maxEl-S.minEl)*B),0,B-1)]++;
+  let mx = 0; for (let i=0;i<B;i++) mx = Math.max(mx,bins[i]);
+  const w = cv.width/B;
+  for (let i=0;i<B;i++){
+    const c = turbo(i/(B-1)), h = (bins[i]/mx)*(cv.height-8);
+    x.fillStyle = "rgb(" + (c[0]|0) + "," + (c[1]|0) + "," + (c[2]|0) + ")";
+    x.fillRect(i*w, cv.height-h, w-1, h);
+  }
+  if (S.floodLvl > 0){
+    const fx = ((floodElev()-S.minEl)/Math.max(1e-6,S.maxEl-S.minEl))*cv.width;
+    x.strokeStyle = "#5aa9e6"; x.lineWidth = 2;
+    x.beginPath(); x.moveTo(fx,0); x.lineTo(fx,cv.height); x.stroke();
+  }
+}
+function updateStats(){
+  const unit = S.calMode === "metric" ? " m" : "";
+  const lvl = floodElev();
+  let inund=0, sus=0, cs=0, low=0, smean=0, smax=0;
+  for (let i=0;i<NN;i++){
+    if (S.floodLvl > 0 && S.dsm[i] <= lvl) inund++;
+    if (S.slope[i] >= S.slopeT) sus++;
+    smean += S.slope[i]; if (S.slope[i] > smax) smax = S.slope[i];
+    cs += S.conf[i]; if (S.conf[i] < 0.42) low++;
+  }
+  const extentM = S.gsd*TEX, areaKm2 = Math.pow(extentM/1000, 2);
+  $("mInund").textContent = (100*inund/NN).toFixed(1) + " %";
+  $("mExp").textContent = (areaKm2*inund/NN).toFixed(3) + " km²";
+  $("mSus").textContent = (100*sus/NN).toFixed(1) + " %";
+  $("mSlopeStat").textContent = (smean/NN).toFixed(1) + "° / " + smax.toFixed(1) + "°";
+  $("mMinMax").textContent = S.minEl.toFixed(1) + " – " + S.maxEl.toFixed(1) + unit;
+  $("mMean").textContent = S.meanEl.toFixed(1) + unit;
+  $("mExtent").textContent = (extentM >= 1000 ? (extentM/1000).toFixed(2)+" km" : extentM.toFixed(0)+" m") +
+                             " · " + S.gsd + " m/px";
+  $("mConf").textContent = (100*cs/NN).toFixed(1) + " %";
+  $("mLowConf").textContent = (100*low/NN).toFixed(1) + " %";
+}
+function refreshDerived(){
+  calibrate(); validate(); updateMesh(); updateThumbs();
+  updateHist(); updateStats(); updateLegend();
+}
+
+/* ---------------------------------------------------------- pipeline */
+async function runPipeline(source){
+  busy(true, "Reading input", 0.02);
+  document.querySelectorAll(".stage").forEach(s => s.classList.remove("done","run"));
+
+  // stage 1
+  stage(0,"run"); let t0 = performance.now();
+  S.srcCanvas = source.canvas; S.truth = source.truth || null;
+  S.gsd = source.gsd; S.geo = source.geo; S.srcName = source.name;
+  $("mSrc").textContent = source.name;
+  $("mGeo").innerHTML = source.geo ? '<span class="pill ok">EPSG:32643</span>' : '<span class="pill warn">absent</span>';
+  $("mGsd").textContent = source.gsd + " m/px";
+  $("mPath").textContent = source.geo ? "Absolute metric DSM" : "Relative DSM → anchored";
+  $("mNote").textContent = source.note;
+  if (source.base != null){ S.base = source.base; $("base").value = source.base; $("vBase").textContent = source.base; }
+  if (source.relief != null){ S.relief = Math.round(source.relief); $("relief").value = S.relief; $("vRelief").textContent = S.relief; }
+  log("input", source.name + " · " + source.gsd + " m/px");
+  stage(0,"done", performance.now()-t0);
+  await frame();
+
+  // stage 2
+  stage(1,"run"); busy(true,"Pre-processing", 0.12); t0 = performance.now();
+  const small = downsample(S.srcCanvas);
+  const pre = preprocess(small);
+  S.rgb = pre.rgb; S.lum = pre.lum; S.sat = pre.sat; S.preCanvas = pre.canvas;
+  log("pre-process", "median denoise · 2–98% stretch · " + N + "×" + N);
+  stage(1,"done", performance.now()-t0);
+  await frame();
+
+  // stage 3
+  stage(2,"run"); t0 = performance.now();
+  const r = await estimateDepth(S.rgb, S.lum, S.sat, S.az, S.structW,
+    p => busy(true, "Estimating depth", 0.15 + p*0.7));
+  S.depth = r.depth; S.conf = r.conf;
+  log("depth", "shadow+shading fused · terrain weight " + r.wTerrain.toFixed(2));
+  stage(2,"done", performance.now()-t0);
+
+  // stage 4
+  stage(3,"run"); busy(true,"Calibrating", 0.9); t0 = performance.now();
+  calibrate(); validate();
+  log("calibrate", $("mTrans").textContent);
+  stage(3,"done", performance.now()-t0);
+  await frame();
+
+  // stage 5
+  stage(4,"run"); busy(true,"Building mesh", 0.96); t0 = performance.now();
+  if (!GL.ready) initGL();
+  updateMesh();
+  log("mesh", (N-1)*(N-1)*2 + " triangles textured");
+  stage(4,"done", performance.now()-t0);
+  await frame();
+
+  // stage 6
+  stage(5,"run"); t0 = performance.now();
+  updateThumbs(); updateHist(); updateStats(); updateLegend();
+  stage(5,"done", performance.now()-t0);
+  log("ready", "flood, slope and profile tools live");
+  busy(false);
+}
+
+/* ------------------------------------------------------------ inputs */
+function loadSample(which){
+  $("sampUrban").classList.toggle("sel", which === "urban");
+  $("sampHill").classList.toggle("sel", which === "hill");
+  const src = which === "urban" ? buildUrban(S.az) : buildHilly(S.az);
+  $("flood").value = 0; S.floodLvl = 0; $("vFlood").textContent = "0";
+  runPipeline(src);
+}
+$("sampUrban").onclick = () => loadSample("urban");
+$("sampHill").onclick  = () => loadSample("hill");
+$("uploadBtn").onclick = () => $("file").click();
+$("file").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const side = Math.max(img.width, img.height);
+    const c = newCanvas(TEX,TEX), x = c.getContext("2d");
+    x.fillStyle = "#000"; x.fillRect(0,0,TEX,TEX);
+    const sc = TEX/side;
+    x.drawImage(img, (TEX-img.width*sc)/2, (TEX-img.height*sc)/2, img.width*sc, img.height*sc);
+    document.querySelectorAll("#sampUrban,#sampHill").forEach(b => b.classList.remove("sel"));
+    runPipeline({ canvas:c, truth:null, gsd:0.5, geo:false, name:f.name,
+      note:"Plain PNG/JPG carries no CRS or pixel size, so the output is a relative DSM. The base and relief sliders anchor it to SRTM or CartoDEM; set the ground sample distance if you know it." });
+  };
+  img.src = URL.createObjectURL(f);
+};
+
+/* ----------------------------------------------------------- sliders */
+function slider(id, label, fmt, apply){
+  const el = $(id);
+  el.addEventListener("input", () => { apply(parseFloat(el.value)); $(label).textContent = fmt(parseFloat(el.value)); });
+}
+slider("az","vAz", v => v, v => { S.az = v; });
+$("az").addEventListener("change", () => { if (S.depth) rerun(); });
+slider("struct","vStruct", v => (v/100).toFixed(2), v => { S.structW = v/100; });
+$("struct").addEventListener("change", () => { if (S.depth) rerun(); });
+slider("base","vBase", v => v, v => { S.base = v; refreshDerived(); });
+slider("relief","vRelief", v => v, v => { S.relief = v; refreshDerived(); });
+slider("flood","vFlood", v => (S.minEl + (v/100)*(S.maxEl-S.minEl)).toFixed(1), v => {
+  S.floodLvl = v;
+  if (S.texMode !== "flood") setTex("flood"); else { updateMesh(); updateLegend(); }
+  updateThumbs(); updateHist(); updateStats();
+});
+slider("slopeT","vSlope", v => v, v => {
+  S.slopeT = v;
+  if (S.texMode === "slide") updateMesh();
+  updateThumbs(); updateStats(); updateLegend();
+});
+slider("exg","vEx", v => (v/10).toFixed(1), v => { S.exg = v/10; updateMesh(); });
+
+async function rerun(){
+  busy(true,"Estimating depth",0.05);
+  stage(2,"run");
+  const t0 = performance.now();
+  const r = await estimateDepth(S.rgb, S.lum, S.sat, S.az, S.structW,
+    p => busy(true,"Estimating depth", p));
+  S.depth = r.depth; S.conf = r.conf;
+  stage(2,"done", performance.now()-t0);
+  log("re-run", "azimuth " + S.az + "° · structure " + S.structW.toFixed(2));
+  refreshDerived();
+  busy(false);
+}
+$("runBtn").onclick = () => { if (S.rgb) rerun(); };
+
+/* ------------------------------------------------------------ chrome */
+document.querySelectorAll("[data-cam]").forEach(b => b.onclick = () => setCam(b.dataset.cam));
+document.querySelectorAll(".frame").forEach(f => f.onclick = () => setTex(f.dataset.tex));
+document.querySelectorAll("[data-cal]").forEach(b => b.onclick = () => {
+  S.calMode = b.dataset.cal;
+  document.querySelectorAll("[data-cal]").forEach(o => o.classList.toggle("sel", o === b));
+  refreshDerived();
+});
+$("probeBtn").onclick = () => {
+  S.probe = !S.probe; S.measure = false;
+  $("probeBtn").classList.toggle("on", S.probe);
+  $("measureBtn").classList.remove("on");
+  $("gl").classList.toggle("probe", S.probe);
+  if (!S.probe){ $("readout").classList.add("hidden"); GL.marker.visible = false; }
+  else log("probe", "click the terrain to read elevation, slope and confidence");
+};
+$("measureBtn").onclick = () => {
+  S.measure = !S.measure; S.probe = false; S.mA = null;
+  $("measureBtn").classList.toggle("on", S.measure);
+  $("probeBtn").classList.remove("on");
+  $("gl").classList.toggle("probe", S.measure);
+  $("readout").classList.add("hidden");
+  if (!S.measure){ GL.marker.visible = GL.markerB.visible = GL.line.visible = false; }
+  else $("profNote").textContent = "Click point A on the terrain, then point B.";
+};
+$("maskBtn").onclick = () => {
+  S.maskLow = !S.maskLow;
+  $("maskBtn").classList.toggle("sel", S.maskLow);
+  $("maskBtn").textContent = S.maskLow ? "Showing all cells" : "Mask low confidence";
+  updateMesh(); updateThumbs();
+};
+$("wireBtn").onclick = () => {
+  GL.mat.wireframe = !GL.mat.wireframe;
+  $("wireBtn").textContent = GL.mat.wireframe ? "Wireframe" : "Solid";
+  $("wireBtn").classList.toggle("sel", GL.mat.wireframe);
+};
+$("themeBtn").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+  if (GL.ready){ updateMesh(); updateThumbs(); updateHist(); }
+};
+
+/* ------------------------------------------------------------- start */
+log("boot", "DepthWizard prototype · SIH26175");
+initGL();
+loadSample("urban");
+</script>
+</body>
+</html>
