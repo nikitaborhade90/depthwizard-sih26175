@@ -131,6 +131,25 @@ button,input,select{font-family:inherit;font-size:inherit;color:inherit}
 .busy .bt{font-size:13px;color:var(--muted);margin-bottom:9px}
 .bar{width:210px;height:3px;background:var(--line);border-radius:2px;overflow:hidden}
 .bar i{display:block;height:100%;width:0;background:var(--amber);transition:width .18s}
+
+.compare{
+  inset:0; z-index:6; pointer-events:auto;
+  background:color-mix(in srgb,var(--sea) 94%,transparent);
+  display:flex; flex-direction:column; padding:14px;
+  backdrop-filter:blur(2px);
+}
+.compare.hidden{display:none}
+.cmpHead{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted);margin-bottom:10px;flex:0 0 auto}
+.cmpClose{background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:12px}
+.cmpClose:hover{color:var(--ink);border-color:var(--amber)}
+.cmpBody{flex:1 1 auto;display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
+.cmpPane{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:9px;display:flex;align-items:center;justify-content:center;overflow:hidden;min-height:0}
+.cmpPane canvas{max-width:100%;max-height:100%;width:auto;height:auto;display:block;image-rendering:pixelated}
+.cmpLabel{position:absolute;left:10px;bottom:10px;background:color-mix(in srgb,var(--panel) 85%,transparent);border:1px solid var(--line);border-radius:6px;padding:4px 9px;font-size:12px;color:var(--ink)}
+.cmpRow{display:flex;gap:6px;justify-content:center;margin-top:12px;flex:0 0 auto;flex-wrap:wrap}
+.cmpTab{background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:6px 12px;font-size:12.5px;color:var(--muted);cursor:pointer}
+.cmpTab.on{border-color:var(--amber);color:var(--amber)}
+@media (max-width:640px){ .cmpBody{grid-template-columns:1fr;grid-template-rows:1fr 1fr} }
 .filmstrip{
   display:flex;gap:1px;flex:0 0 auto;border-top:1px solid var(--line);background:var(--panel);padding:8px 10px;overflow-x:auto;
 }
@@ -235,6 +254,31 @@ input[type=number],select{
         <button class="chip" data-cam="tour">Flythrough</button>
         <button class="chip" id="probeBtn">Probe height</button>
         <button class="chip" id="measureBtn">Measure A→B</button>
+        <button class="chip" id="compareBtn">Before / After</button>
+      </div>
+
+      <div class="overlay compare hidden" id="compareOverlay">
+        <div class="cmpHead">
+          <span>Before / after — input image vs. calibrated elevation</span>
+          <button class="cmpClose" id="compareClose">Close ✕</button>
+        </div>
+        <div class="cmpBody">
+          <div class="cmpPane">
+            <canvas id="cmpBefore"></canvas>
+            <span class="cmpLabel">Before — input image</span>
+          </div>
+          <div class="cmpPane">
+            <canvas id="cmpAfter"></canvas>
+            <span class="cmpLabel" id="cmpAfterLabel">After — calibrated DSM</span>
+          </div>
+        </div>
+        <div class="cmpRow">
+          <button class="cmpTab on" data-after="dsm">Elevation</button>
+          <button class="cmpTab" data-after="slope">Slope</button>
+          <button class="cmpTab" data-after="flood">Flood</button>
+          <button class="cmpTab" data-after="slide">Landslide</button>
+          <button class="cmpTab" data-after="conf">Confidence</button>
+        </div>
       </div>
 
       <div class="overlay legend" id="legend">
@@ -1269,7 +1313,7 @@ function updateStats(){
 }
 function refreshDerived(){
   calibrate(); validate(); updateMesh(); updateThumbs();
-  updateHist(); updateStats(); updateLegend();
+  updateHist(); updateStats(); updateLegend(); renderCompare();
 }
 
 /* ---------------------------------------------------------- pipeline */
@@ -1326,7 +1370,7 @@ async function runPipeline(source){
 
   // stage 6
   stage(5,"run"); t0 = performance.now();
-  updateThumbs(); updateHist(); updateStats(); updateLegend();
+  updateThumbs(); updateHist(); updateStats(); updateLegend(); renderCompare();
   stage(5,"done", performance.now()-t0);
   log("ready", "flood, slope and profile tools live");
   busy(false);
@@ -1378,12 +1422,12 @@ slider("relief","vRelief", v => v, v => { S.relief = v; refreshDerived(); });
 slider("flood","vFlood", v => (S.minEl + (v/100)*(S.maxEl-S.minEl)).toFixed(1), v => {
   S.floodLvl = v;
   if (S.texMode !== "flood") setTex("flood"); else { updateMesh(); updateLegend(); }
-  updateThumbs(); updateHist(); updateStats();
+  updateThumbs(); updateHist(); updateStats(); renderCompare();
 });
 slider("slopeT","vSlope", v => v, v => {
   S.slopeT = v;
   if (S.texMode === "slide") updateMesh();
-  updateThumbs(); updateStats(); updateLegend();
+  updateThumbs(); updateStats(); updateLegend(); renderCompare();
 });
 slider("exg","vEx", v => (v/10).toFixed(1), v => { S.exg = v/10; updateMesh(); });
 
@@ -1426,6 +1470,38 @@ $("measureBtn").onclick = () => {
   if (!S.measure){ GL.marker.visible = GL.markerB.visible = GL.line.visible = false; }
   else $("profNote").textContent = "Click point A on the terrain, then point B.";
 };
+/* ------------------------------------------------------ before/after */
+const CMP = { open:false, afterMode:"dsm" };
+function renderCompare(){
+  if (!CMP.open || !S.dsm) return;
+  const labels = { dsm:"calibrated DSM", slope:"slope map", flood:"flood extent",
+                    slide:"landslide susceptibility", conf:"confidence" };
+  $("cmpAfterLabel").textContent = "After — " + labels[CMP.afterMode];
+  const draw = (canvasEl, srcCanvas) => {
+    const size = 512;
+    canvasEl.width = size; canvasEl.height = size;
+    const ctx = canvasEl.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(srcCanvas, 0, 0, size, size);
+  };
+  draw($("cmpBefore"), texCanvas("rgb"));
+  draw($("cmpAfter"), texCanvas(CMP.afterMode));
+}
+$("compareBtn").onclick = () => {
+  CMP.open = true;
+  $("compareOverlay").classList.remove("hidden");
+  renderCompare();
+};
+$("compareClose").onclick = () => {
+  CMP.open = false;
+  $("compareOverlay").classList.add("hidden");
+};
+document.querySelectorAll(".cmpTab").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".cmpTab").forEach(o => o.classList.toggle("on", o === b));
+  CMP.afterMode = b.dataset.after;
+  renderCompare();
+});
+
 $("maskBtn").onclick = () => {
   S.maskLow = !S.maskLow;
   $("maskBtn").classList.toggle("sel", S.maskLow);
